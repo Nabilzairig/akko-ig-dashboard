@@ -1,5 +1,5 @@
 import pandas as pd
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from database import get_connection, get_latest_snapshot, get_oldest_snapshot_within
 
@@ -8,13 +8,12 @@ def get_current_state(handle):
     return get_latest_snapshot(handle)
 
 
-def get_posting_metrics(handle, days):
-    """Return posting cadence metrics for handle over the last `days` days."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+def get_posting_metrics(handle, start_iso, end_iso):
+    """Return posting cadence metrics for handle over the [start_iso, end_iso] window."""
     with get_connection() as conn:
         df = pd.read_sql_query(
-            "SELECT * FROM posts WHERE handle = ? AND posted_at >= ?",
-            conn, params=(handle, cutoff),
+            "SELECT * FROM posts WHERE handle = ? AND posted_at >= ? AND posted_at <= ?",
+            conn, params=(handle, start_iso, end_iso),
         )
 
     if df.empty:
@@ -29,6 +28,14 @@ def get_posting_metrics(handle, days):
     df = df.sort_values("posted_at")
     gaps = df["posted_at"].diff().dropna().dt.total_seconds() / 86400
 
+    start_dt = datetime.fromisoformat(start_iso)
+    end_dt   = datetime.fromisoformat(end_iso)
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
+    days = max((end_dt - start_dt).days, 1)
+
     return {
         "posts_count": n,
         "posts_per_week": n / (days / 7),
@@ -41,13 +48,12 @@ def get_posting_metrics(handle, days):
     }
 
 
-def get_engagement_metrics(handle, days):
-    """Return engagement metrics for handle over the last `days` days."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+def get_engagement_metrics(handle, start_iso, end_iso):
+    """Return engagement metrics for handle over the [start_iso, end_iso] window."""
     with get_connection() as conn:
         df = pd.read_sql_query(
-            "SELECT * FROM posts WHERE handle = ? AND posted_at >= ?",
-            conn, params=(handle, cutoff),
+            "SELECT * FROM posts WHERE handle = ? AND posted_at >= ? AND posted_at <= ?",
+            conn, params=(handle, start_iso, end_iso),
         )
 
     snapshot = get_latest_snapshot(handle)
@@ -59,9 +65,9 @@ def get_engagement_metrics(handle, days):
             "engagement_rate": 0.0, "avg_video_views": 0.0, "reel_view_rate": 0.0,
         }
 
-    avg_likes    = float(df["likes"].mean())
-    avg_comments = float(df["comments"].mean())
-    reels        = df[df["media_type"] == "reel"]
+    avg_likes       = float(df["likes"].mean())
+    avg_comments    = float(df["comments"].mean())
+    reels           = df[df["media_type"] == "reel"]
     avg_video_views = float(reels["video_views"].mean()) if not reels.empty else 0.0
 
     return {

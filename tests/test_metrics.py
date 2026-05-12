@@ -12,6 +12,11 @@ def _ts(days_ago=0):
     return (NOW - timedelta(days=days_ago)).isoformat()
 
 
+def _iso_range(days):
+    """Return (start_iso, end_iso) covering the last `days` days."""
+    return (NOW - timedelta(days=days)).isoformat(), NOW.isoformat()
+
+
 def _seed_snapshot(handle, days_ago=0, followers=1000):
     insert_snapshot(handle, {
         "scraped_at": _ts(days_ago),
@@ -47,7 +52,7 @@ def test_get_current_state_returns_latest(tmp_db):
 
 def test_get_posting_metrics_empty(tmp_db):
     _seed_snapshot("h1")
-    m = get_posting_metrics("h1", 30)
+    m = get_posting_metrics("h1", *_iso_range(30))
     assert m["posts_count"] == 0
     assert m["posts_per_week"] == 0.0
 
@@ -56,7 +61,7 @@ def test_get_posting_metrics_reel_share(tmp_db):
     _seed_snapshot("h1")
     _seed_post("h1", "r1", media_type="reel", days_ago=2)
     _seed_post("h1", "i1", media_type="image", days_ago=3)
-    m = get_posting_metrics("h1", 30)
+    m = get_posting_metrics("h1", *_iso_range(30))
     assert m["posts_count"] == 2
     assert m["reel_share"] == 0.5
     assert m["image_share"] == 0.5
@@ -65,7 +70,7 @@ def test_get_posting_metrics_reel_share(tmp_db):
 def test_get_engagement_metrics(tmp_db):
     _seed_snapshot("h1", followers=1000)
     _seed_post("h1", "r1", media_type="reel", likes=200, comments=10, views=500)
-    m = get_engagement_metrics("h1", 30)
+    m = get_engagement_metrics("h1", *_iso_range(30))
     assert m["avg_likes"] == 200.0
     assert m["avg_comments"] == 10.0
     assert abs(m["engagement_rate"] - 0.21) < 0.001
