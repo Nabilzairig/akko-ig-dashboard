@@ -3,6 +3,7 @@ from database import insert_snapshot, upsert_post
 from metrics import (
     get_current_state, get_posting_metrics,
     get_engagement_metrics, get_growth_metrics, compute_scores,
+    get_growth_delta_for_range,
 )
 
 NOW = datetime.now(timezone.utc)
@@ -98,6 +99,16 @@ def test_get_growth_metrics_7d_delta(tmp_db):
     _seed_snapshot("h1", days_ago=0,  followers=1000)
     m = get_growth_metrics("h1")
     assert m["follower_delta_7d"] == 30   # 1000 - 970
+
+
+def test_get_growth_delta_for_range(tmp_db):
+    _seed_snapshot("h1", days_ago=60, followers=800)
+    _seed_snapshot("h1", days_ago=45, followers=850)
+    _seed_snapshot("h1", days_ago=0,  followers=1000)
+    # Range: 50 days ago → today; nearest start snapshot is 45d ago (850)
+    delta, pct = get_growth_delta_for_range("h1", _ts(50), _ts(0))
+    assert delta == 150   # 1000 - 850
+    assert abs(pct - (150 / 850 * 100)) < 0.01
 
 
 def test_compute_scores_all_equal_returns_50(tmp_db):

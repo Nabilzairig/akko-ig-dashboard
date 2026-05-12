@@ -127,6 +127,23 @@ def get_growth_metrics(handle):
     }
 
 
+def get_growth_delta_for_range(handle, start_iso, end_iso):
+    """
+    Return (delta, pct) follower change between the snapshots nearest to
+    start_iso and end_iso. Returns (None, None) when no snapshots exist.
+    """
+    from database import get_snapshot_nearest
+    snap_start = get_snapshot_nearest(handle, start_iso)
+    snap_end   = get_snapshot_nearest(handle, end_iso)
+    if not snap_start or not snap_end:
+        return None, None
+    f_start = snap_start["followers"] or 0
+    f_end   = snap_end["followers"]   or 0
+    delta   = f_end - f_start
+    pct     = (delta / f_start * 100) if f_start > 0 else None
+    return delta, pct
+
+
 def _normalize(values):
     """Min-max normalize to [0, 1]; returns 0.5 for all when min == max."""
     filtered = [v for v in values if v is not None]
