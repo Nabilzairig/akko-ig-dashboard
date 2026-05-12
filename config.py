@@ -4,7 +4,7 @@ BASE_DIR = Path(__file__).parent
 
 BRANDS = {
     "Mandi":    "mandi.basmati.morocco",
-    "Fancy":    "fancy.morocco",
+    "Fancy":    "fancy_morocco",
     "Elephant": "elephant_morocco",
     "Add-Me":   "addme.morocco",
 }
