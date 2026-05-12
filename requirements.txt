@@ -1,0 +1,7 @@
+instaloader>=4.13
+streamlit>=1.36
+pandas>=2.2
+plotly>=5.22
+apscheduler>=3.10
+pytz>=2024.1
+pytest>=8.0
