@@ -69,6 +69,19 @@ def get_latest_snapshot(handle):
     return dict(row) if row else None
 
 
+def get_snapshot_nearest(handle, target_iso):
+    """Return the profile snapshot whose scraped_at is closest to target_iso."""
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT * FROM profile_snapshots
+               WHERE handle = ?
+               ORDER BY ABS(julianday(scraped_at) - julianday(?)) ASC
+               LIMIT 1""",
+            (handle, target_iso),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def get_oldest_snapshot_within(handle, days):
     from datetime import datetime, timezone, timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()

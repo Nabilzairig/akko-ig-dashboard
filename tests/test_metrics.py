@@ -92,6 +92,14 @@ def test_get_growth_metrics_sufficient_data(tmp_db):
     assert m["follower_delta_30d"] == 100
 
 
+def test_get_growth_metrics_7d_delta(tmp_db):
+    _seed_snapshot("h1", days_ago=20, followers=900)
+    _seed_snapshot("h1", days_ago=5,  followers=970)
+    _seed_snapshot("h1", days_ago=0,  followers=1000)
+    m = get_growth_metrics("h1")
+    assert m["follower_delta_7d"] == 30   # 1000 - 970
+
+
 def test_compute_scores_all_equal_returns_50(tmp_db):
     brands = ["Mandi", "Fancy", "Elephant", "Add-Me"]
     all_metrics = {b: {

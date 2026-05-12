@@ -84,6 +84,7 @@ def get_growth_metrics(handle):
     snapshot = get_latest_snapshot(handle)
     if not snapshot:
         return {
+            "follower_delta_7d":  None, "follower_growth_pct_7d":  None,
             "follower_delta_30d": None, "follower_growth_pct_30d": None,
             "follower_delta_90d": None, "follower_growth_pct_90d": None,
             "sufficient_data_for_growth": False, "history_days": 0,
@@ -110,10 +111,13 @@ def get_growth_metrics(handle):
         pct   = (delta / old_f * 100) if old_f > 0 else None
         return delta, pct
 
+    d7,  p7  = _delta(7)
     d30, p30 = _delta(30)
     d90, p90 = _delta(90)
 
     return {
+        "follower_delta_7d":       d7,
+        "follower_growth_pct_7d":  p7,
         "follower_delta_30d":      d30,
         "follower_growth_pct_30d": p30,
         "follower_delta_90d":      d90,
