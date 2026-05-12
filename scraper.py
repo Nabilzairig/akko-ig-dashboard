@@ -1,3 +1,4 @@
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -14,6 +15,22 @@ _UA = (
 )
 
 
+def _make_loader():
+    """Create an Instaloader instance. Injects IG_SESSION_ID cookie if set in environment."""
+    loader = instaloader.Instaloader(
+        download_pictures=False,
+        download_videos=False,
+        download_video_thumbnails=False,
+        save_metadata=False,
+        post_metadata_txt_pattern="",
+    )
+    loader.context._session.headers["User-Agent"] = _UA
+    session_id = os.environ.get("IG_SESSION_ID", "").strip()
+    if session_id:
+        loader.context._session.cookies.set("sessionid", session_id, domain=".instagram.com")
+    return loader
+
+
 def _media_type(post):
     t = post.typename
     if t == "GraphSidecar":
@@ -25,14 +42,7 @@ def _media_type(post):
 
 def scrape_profile(handle):
     """Scrape the latest POSTS_PER_SCRAPE posts from a public profile and persist to DB."""
-    loader = instaloader.Instaloader(
-        download_pictures=False,
-        download_videos=False,
-        download_video_thumbnails=False,
-        save_metadata=False,
-        post_metadata_txt_pattern="",
-    )
-    loader.context._session.headers["User-Agent"] = _UA
+    loader = _make_loader()
 
     try:
         profile = instaloader.Profile.from_username(loader.context, handle)

@@ -1,3 +1,4 @@
+import threading
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
@@ -72,8 +73,10 @@ st.caption(f"Last scrape: {_last_scrape_ts()}")
 col_btn, col_window = st.columns([1, 3])
 with col_btn:
     if st.button("Force refresh now"):
-        with st.spinner("Scraping…"):
-            scrape_all()
+        if not st.session_state.get("scrape_running"):
+            st.session_state["scrape_running"] = True
+            st.session_state["scrape_started_at"] = datetime.now(timezone.utc).isoformat()
+            threading.Thread(target=scrape_all, daemon=True).start()
         st.rerun()
 with col_window:
     if "window" not in st.session_state:
@@ -84,6 +87,22 @@ with col_window:
     st.session_state["window"] = window
 
 page = st.sidebar.radio("Page", ["Portfolio Overview", "Per-Brand Drill-Down"])
+
+# ── Scrape status banner ──────────────────────────────────────────────────────
+
+if st.session_state.get("scrape_running"):
+    started = st.session_state.get("scrape_started_at", "")
+    with get_connection() as conn:
+        done = conn.execute(
+            "SELECT COUNT(*) FROM scrape_log WHERE run_at > ?", (started,)
+        ).fetchone()[0]
+    total = len(BRANDS)
+    if done >= total:
+        st.session_state["scrape_running"] = False
+        st.success("Scrape complete — data updated.")
+    else:
+        st.info(f"Scraping in progress… {done}/{total} accounts done. Page will update automatically.")
+        st.rerun()
 
 all_metrics = _load_all_metrics(window)
 scores      = compute_scores(all_metrics)
