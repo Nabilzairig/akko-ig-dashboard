@@ -45,6 +45,10 @@ def _make_loader():
             sess.headers["X-CSRFToken"] = csrf
         if mid:
             sess.cookies.set("mid", mid, domain=".instagram.com")
+        # Marking as logged-in switches instaloader to the authenticated
+        # GraphQL endpoint (xdt_api__v1__feed__user_timeline_graphql_connection)
+        # which returns full post edges; the unauthenticated path returns only count.
+        loader.context.username = "__scraper__"
     return loader
 
 
