@@ -1,8 +1,10 @@
 import os
 import re
 import time
+import urllib.parse
 from datetime import datetime, timezone
 
+import requests
 import instaloader
 
 from config import BRANDS, POSTS_PER_SCRAPE, SLEEP_BETWEEN_POSTS, SLEEP_BETWEEN_PROFILES
@@ -16,7 +18,6 @@ _UA = (
 
 
 def _make_loader():
-    """Create an Instaloader instance. Injects IG_SESSION_ID cookie if set in environment."""
     loader = instaloader.Instaloader(
         download_pictures=False,
         download_videos=False,
@@ -25,9 +26,25 @@ def _make_loader():
         post_metadata_txt_pattern="",
     )
     loader.context._session.headers["User-Agent"] = _UA
-    session_id = os.environ.get("IG_SESSION_ID", "").strip()
+    session_id = urllib.parse.unquote(os.environ.get("IG_SESSION_ID", "").strip())
     if session_id:
-        loader.context._session.cookies.set("sessionid", session_id, domain=".instagram.com")
+        # Bootstrap csrftoken by hitting the homepage with the session cookie,
+        # then inject both cookies so GraphQL requests are authenticated.
+        r = requests.get(
+            "https://www.instagram.com/",
+            headers={"User-Agent": _UA},
+            cookies={"sessionid": session_id},
+            timeout=15,
+        )
+        csrf = r.cookies.get("csrftoken", "")
+        mid  = r.cookies.get("mid", "")
+        sess = loader.context._session
+        sess.cookies.set("sessionid",  session_id, domain=".instagram.com")
+        if csrf:
+            sess.cookies.set("csrftoken", csrf, domain=".instagram.com")
+            sess.headers["X-CSRFToken"] = csrf
+        if mid:
+            sess.cookies.set("mid", mid, domain=".instagram.com")
     return loader
 
 
