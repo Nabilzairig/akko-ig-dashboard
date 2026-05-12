@@ -108,6 +108,13 @@ def get_best_posting_slots(handle, start_iso, end_iso, top_n=3):
     return [dict(r) for r in rows]
 
 
+def get_earliest_post_date():
+    """Return the ISO timestamp of the oldest post across all handles, or None."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT MIN(posted_at) FROM posts").fetchone()
+    return row[0] if row and row[0] else None
+
+
 def get_oldest_snapshot_within(handle, days):
     from datetime import datetime, timezone, timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()

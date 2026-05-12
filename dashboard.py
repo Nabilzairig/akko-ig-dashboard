@@ -1,12 +1,18 @@
 import threading
 import streamlit as st
+st.set_page_config(
+    page_title="AKKO Instagram Dashboard",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
 from datetime import datetime, timezone, timedelta, time as dtime
 
 from config import BRANDS, TIMEZONE, SCRAPE_HOUR
-from database import init_db, get_connection, get_best_posting_slots
+from database import init_db, get_connection, get_best_posting_slots, get_earliest_post_date
 from scraper import scrape_all
 from metrics import (
     get_current_state, get_posting_metrics,
@@ -29,37 +35,146 @@ BRAND_COLORS = {
 
 _CSS = """
 <style>
-/* KPI metric cards */
-div[data-testid="metric-container"] {
-    background: white;
-    border-radius: 12px;
-    padding: 16px 20px 12px 20px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.09);
-    border-top: 3px solid #833AB4;
-    margin-bottom: 8px;
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap');
+
+/* ── Base typography ── */
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+h1, h2, h3, h4, .stTitle {
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
+    font-weight: 700;
+    letter-spacing: -0.02em;
 }
 
-/* Section headers */
-h2, h3 { color: #1a1a2e; }
+/* ── Main background ── */
+.stApp { background: #0D0D14; }
+.main .block-container {
+    padding-top: 1.8rem;
+    max-width: 1400px;
+}
 
-/* Sidebar */
-section[data-testid="stSidebar"] { background: #1a1a2e; }
-section[data-testid="stSidebar"] * { color: #e0e0e0 !important; }
-section[data-testid="stSidebar"] .stRadio label { color: #e0e0e0 !important; }
+/* ── Sidebar ── */
+section[data-testid="stSidebar"] {
+    background: #0A0A12 !important;
+    border-right: 1px solid rgba(255,255,255,0.06);
+}
+section[data-testid="stSidebar"] * { color: #B0B0C8 !important; }
+section[data-testid="stSidebar"] .stRadio label { font-weight: 500 !important; }
 
-/* Dividers */
-hr { border-color: #E5E7EB; margin: 1.2rem 0; }
-
-/* Quick preset buttons — pill style */
-div[data-testid="stButton"] > button {
-    border-radius: 20px;
-    padding: 4px 16px;
-    font-size: 0.82rem;
+/* ── KPI metric cards ── */
+div[data-testid="metric-container"] {
+    background: rgba(22, 22, 31, 0.85);
+    border-radius: 16px;
+    padding: 18px 22px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-top: 3px solid #833AB4;
+    box-shadow: 0 4px 32px rgba(0,0,0,0.45), 0 0 0 1px rgba(131,58,180,0.08);
+    backdrop-filter: blur(12px);
+    margin-bottom: 8px;
+}
+div[data-testid="stMetricValue"] {
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
+    font-weight: 700;
+    color: #F0F0F8 !important;
+}
+div[data-testid="stMetricLabel"] > div {
+    color: #6868A0 !important;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+div[data-testid="stMetricDelta"] {
     font-weight: 600;
 }
 
-/* Date picker max-width */
-div[data-testid="stDateInput"] { max-width: 360px; }
+/* ── Pill preset buttons ── */
+div[data-testid="stButton"] > button {
+    border-radius: 20px;
+    padding: 5px 18px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    background: rgba(131, 58, 180, 0.12);
+    border: 1px solid rgba(131, 58, 180, 0.35);
+    color: #C09FD8 !important;
+    transition: background 0.18s, border-color 0.18s, color 0.18s;
+}
+div[data-testid="stButton"] > button:hover {
+    background: rgba(131, 58, 180, 0.28);
+    border-color: #833AB4;
+    color: #EEE0FF !important;
+}
+
+/* ── Dataframes / tables ── */
+div[data-testid="stDataFrame"] > div {
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.06) !important;
+    overflow: hidden;
+}
+
+/* ── Dividers ── */
+hr {
+    border: none;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    margin: 1.4rem 0;
+}
+
+/* ── Expanders ── */
+div[data-testid="stExpander"] > details {
+    background: rgba(22, 22, 31, 0.7);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 12px;
+}
+div[data-testid="stExpander"] > details > summary {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+/* ── Alert boxes ── */
+div[data-testid="stAlert"] {
+    border-radius: 10px;
+    border-left-width: 4px;
+}
+
+/* ── Date picker ── */
+div[data-testid="stDateInput"] { max-width: 380px; }
+
+/* ── Selectbox ── */
+div[data-testid="stSelectbox"] label {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 600;
+}
+
+/* ── Plotly charts – transparent bg ── */
+.js-plotly-plot .plotly, .js-plotly-plot .plotly .svg-container {
+    background: transparent !important;
+}
+
+/* ── Section subheaders ── */
+h3[data-testid] {
+    color: #E8E8F5 !important;
+    font-size: 1.05rem;
+    margin-top: 0.3rem;
+}
+
+/* ── Download button ── */
+div[data-testid="stDownloadButton"] > button {
+    background: rgba(131, 58, 180, 0.18);
+    border: 1px solid rgba(131, 58, 180, 0.4);
+    color: #D0AEFF !important;
+    border-radius: 10px;
+    font-weight: 600;
+}
+div[data-testid="stDownloadButton"] > button:hover {
+    background: rgba(131, 58, 180, 0.32);
+}
+
+/* ── Caption text ── */
+div[data-testid="stCaptionContainer"] p {
+    color: #585880 !important;
+}
 </style>
 """
 
@@ -119,13 +234,30 @@ def _load_all_metrics(start_iso, end_iso):
 # ── Header ────────────────────────────────────────────────────────────────────
 
 st.markdown(_CSS, unsafe_allow_html=True)
-st.title("AKKO Portfolio Instagram Benchmark")
+st.markdown(
+    "<h1 style='background:linear-gradient(135deg,#833AB4 0%,#FD1D1D 50%,#FCAF45 100%);"
+    "-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;"
+    "font-family:Plus Jakarta Sans,sans-serif;font-weight:800;font-size:2rem;margin-bottom:0'>"
+    "AKKO Portfolio Instagram Benchmark</h1>",
+    unsafe_allow_html=True,
+)
 st.caption(f"Last scrape: {_last_scrape_ts()}")
 
 today = datetime.now(timezone.utc).date()
 
+# Earliest post date for "All time" default
+_earliest_iso = get_earliest_post_date()
+earliest_date = (datetime.fromisoformat(_earliest_iso).date()
+                 if _earliest_iso else today - timedelta(days=365))
+
+# Defaults — all time on first load
+if "date_start" not in st.session_state:
+    st.session_state["date_start"] = earliest_date
+if "date_end" not in st.session_state:
+    st.session_state["date_end"] = today
+
 # Quick preset buttons
-col_btn, col_7, col_30, col_90 = st.columns([2, 1, 1, 1])
+col_btn, col_7, col_30, col_90, col_all = st.columns([2, 1, 1, 1, 1])
 with col_btn:
     if st.button("⟳ Force refresh"):
         if not st.session_state.get("scrape_running"):
@@ -145,12 +277,10 @@ with col_90:
     if st.button("Last 90 d"):
         st.session_state["date_start"] = today - timedelta(days=90)
         st.session_state["date_end"]   = today
-
-# Defaults
-if "date_start" not in st.session_state:
-    st.session_state["date_start"] = today - timedelta(days=30)
-if "date_end" not in st.session_state:
-    st.session_state["date_end"] = today
+with col_all:
+    if st.button("All time"):
+        st.session_state["date_start"] = earliest_date
+        st.session_state["date_end"]   = today
 
 # Date range picker
 date_range = st.date_input(
@@ -249,12 +379,16 @@ if page == "Portfolio Overview":
                     color_discrete_sequence=["#833AB4", "#FCAF45", "#405DE6"],
                     title=f"Posts ({window_label}): {n}",
                 )
-                fig_donut.update_traces(textinfo="percent", hoverinfo="label+value")
+                fig_donut.update_traces(textinfo="percent", hoverinfo="label+value",
+                                        textfont=dict(color="#F0F0F8"))
                 fig_donut.update_layout(
                     margin=dict(t=36, b=0, l=0, r=0),
                     showlegend=True,
-                    legend=dict(orientation="h", y=-0.1, font=dict(size=10)),
+                    legend=dict(orientation="h", y=-0.1, font=dict(size=10, color="#B0B0C8")),
                     height=200,
+                    paper_bgcolor="transparent",
+                    plot_bgcolor="transparent",
+                    title_font=dict(color="#C0C0D8", size=12),
                 )
                 st.plotly_chart(fig_donut, use_container_width=True)
             else:
@@ -283,11 +417,25 @@ if page == "Portfolio Overview":
             fillcolor=color,
         ))
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-        title="Brand Radar",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25),
+        polar=dict(
+            bgcolor="rgba(22,22,31,0.6)",
+            radialaxis=dict(
+                visible=True, range=[0, 100],
+                gridcolor="rgba(255,255,255,0.1)",
+                linecolor="rgba(255,255,255,0.1)",
+                tickfont=dict(color="#8888A0", size=10),
+            ),
+            angularaxis=dict(
+                gridcolor="rgba(255,255,255,0.1)",
+                linecolor="rgba(255,255,255,0.12)",
+                tickfont=dict(color="#C0C0D8", size=11),
+            ),
+        ),
+        title=dict(text="Brand Radar", font=dict(color="#F0F0F8", family="Plus Jakarta Sans", size=16)),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, font=dict(color="#C0C0D8")),
         margin=dict(t=60, b=60),
-        paper_bgcolor="white",
+        paper_bgcolor="rgba(22,22,31,0.85)",
+        plot_bgcolor="transparent",
     )
     st.plotly_chart(fig, use_container_width=True)
     if history_min < 14:
@@ -462,7 +610,14 @@ elif page == "Per-Brand Drill-Down":
                      .fillna(0))
         pivot.index = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         fig_h = px.imshow(pivot, labels=dict(x="Hour", y="Day", color="Posts"),
-                          title="Posts by Day × Hour", color_continuous_scale="Blues")
+                          title="Posts by Day × Hour", color_continuous_scale="Purples")
+        fig_h.update_layout(
+            paper_bgcolor="rgba(22,22,31,0.85)",
+            plot_bgcolor="rgba(22,22,31,0.85)",
+            font=dict(color="#C0C0D8"),
+            title_font=dict(color="#F0F0F8", family="Plus Jakarta Sans"),
+            margin=dict(t=48, b=8),
+        )
         st.plotly_chart(fig_h, use_container_width=True)
 
     # Best slots table
@@ -530,4 +685,14 @@ elif page == "Per-Brand Drill-Down":
             title="Follower Count Over Time",
             color_discrete_sequence=[BRAND_COLORS.get(selected, "#833AB4")],
         )
+        fig_t.update_layout(
+            paper_bgcolor="rgba(22,22,31,0.85)",
+            plot_bgcolor="rgba(22,22,31,0.5)",
+            font=dict(color="#C0C0D8"),
+            title_font=dict(color="#F0F0F8", family="Plus Jakarta Sans"),
+            xaxis=dict(gridcolor="rgba(255,255,255,0.06)", linecolor="rgba(255,255,255,0.1)"),
+            yaxis=dict(gridcolor="rgba(255,255,255,0.06)", linecolor="rgba(255,255,255,0.1)"),
+            margin=dict(t=48, b=8),
+        )
+        fig_t.update_traces(line=dict(width=2.5))
         st.plotly_chart(fig_t, use_container_width=True)
