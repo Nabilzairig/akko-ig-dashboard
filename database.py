@@ -82,6 +82,32 @@ def get_snapshot_nearest(handle, target_iso):
     return dict(row) if row else None
 
 
+def get_best_posting_slots(handle, start_iso, end_iso, top_n=3):
+    """
+    Return the top N (day-of-week, hour) slots ranked by average engagement
+    (likes + comments) for posts in [start_iso, end_iso].
+    Returns a list of dicts: {dow, hour, avg_engagement, post_count}.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                CAST(strftime('%w', posted_at) AS INTEGER) AS dow,
+                CAST(strftime('%H', posted_at) AS INTEGER) AS hour,
+                AVG(likes + comments)                      AS avg_engagement,
+                COUNT(*)                                   AS post_count
+            FROM posts
+            WHERE handle = ? AND posted_at >= ? AND posted_at <= ?
+            GROUP BY dow, hour
+            HAVING post_count >= 1
+            ORDER BY avg_engagement DESC
+            LIMIT ?
+            """,
+            (handle, start_iso, end_iso, top_n),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_oldest_snapshot_within(handle, days):
     from datetime import datetime, timezone, timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()

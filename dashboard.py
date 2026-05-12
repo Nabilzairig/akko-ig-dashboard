@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta, time as dtime
 
 from config import BRANDS, TIMEZONE, SCRAPE_HOUR
-from database import init_db, get_connection
+from database import init_db, get_connection, get_best_posting_slots
 from scraper import scrape_all
 from metrics import (
     get_current_state, get_posting_metrics,
@@ -84,6 +84,7 @@ init_db()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=60)
 def _last_scrape_ts():
     with get_connection() as conn:
         row = conn.execute(
@@ -102,6 +103,7 @@ def _score_color(val):
     return "background-color: #16a34a; color: white"
 
 
+@st.cache_data(ttl=300)
 def _load_all_metrics(start_iso, end_iso):
     result = {}
     for name, handle in BRANDS.items():
@@ -182,6 +184,7 @@ if st.session_state.get("scrape_running"):
     total = len(BRANDS)
     if done >= total:
         st.session_state["scrape_running"] = False
+        st.cache_data.clear()
         st.success("Scrape complete — data updated.")
     else:
         st.info(f"Scraping in progress… {done}/{total} accounts done. Page will update automatically.")
@@ -203,32 +206,60 @@ if page == "Portfolio Overview":
         state  = m["state"] or {}
         growth = m["growth"]
         with cols[i]:
-            followers = state.get("followers", 0)
-            d7        = growth.get("follower_delta_7d")
-            d30       = growth.get("follower_delta_30d")
-            d90       = growth.get("follower_delta_90d")
-            d_custom, _ = get_growth_delta_for_range(BRANDS[name], start_iso, end_iso)
+            followers  = state.get("followers", 0)
+            d7,  p7   = growth.get("follower_delta_7d"),  growth.get("follower_growth_pct_7d")
+            d30, p30  = growth.get("follower_delta_30d"), growth.get("follower_growth_pct_30d")
+            d90, p90  = growth.get("follower_delta_90d"), growth.get("follower_growth_pct_90d")
+            d_custom, p_custom = get_growth_delta_for_range(BRANDS[name], start_iso, end_iso)
 
             st.markdown(f"**{name}**")
             st.caption(f"@{BRANDS[name]}")
             st.metric("Followers", f"{followers:,}",
                       delta=f"{d30:+,}" if d30 is not None else None)
 
+            def _fmt_delta(d, p):
+                if d is None:
+                    return "—", "—"
+                pct_str = f"{p:+.1f}%" if p is not None else "—"
+                return f"{d:+,}", pct_str
+
+            rows_d = [_fmt_delta(d7, p7), _fmt_delta(d30, p30),
+                      _fmt_delta(d90, p90), _fmt_delta(d_custom, p_custom)]
             st.dataframe(
                 pd.DataFrame({
-                    "Period":        ["7 d", "30 d", "90 d", window_label],
-                    "New followers": [
-                        f"{d7:+,}"      if d7      is not None else "—",
-                        f"{d30:+,}"     if d30     is not None else "—",
-                        f"{d90:+,}"     if d90     is not None else "—",
-                        f"{d_custom:+,}" if d_custom is not None else "—",
-                    ],
+                    "Period":  ["7 d", "30 d", "90 d", window_label],
+                    "+/− flw": [r[0] for r in rows_d],
+                    "%":       [r[1] for r in rows_d],
                 }),
                 use_container_width=True,
                 hide_index=True,
             )
 
-            st.metric(f"Posts ({window_label})", m["posting"]["posts_count"])
+            # Content mix donut
+            posting = m["posting"]
+            n = posting["posts_count"]
+            if n > 0:
+                reels      = round(posting["reel_share"]     * n)
+                carousels  = round(posting["carousel_share"] * n)
+                images     = n - reels - carousels
+                fig_donut = px.pie(
+                    names=["Reels", "Carousels", "Images"],
+                    values=[reels, carousels, images],
+                    hole=0.58,
+                    color_discrete_sequence=["#833AB4", "#FCAF45", "#405DE6"],
+                    title=f"Posts ({window_label}): {n}",
+                )
+                fig_donut.update_traces(textinfo="percent", hoverinfo="label+value")
+                fig_donut.update_layout(
+                    margin=dict(t=36, b=0, l=0, r=0),
+                    showlegend=True,
+                    legend=dict(orientation="h", y=-0.1, font=dict(size=10)),
+                    height=200,
+                )
+                st.plotly_chart(fig_donut, use_container_width=True)
+            else:
+                st.metric(f"Posts ({window_label})", 0)
+
             st.metric("Eng. rate", f"{m['engagement']['engagement_rate'] * 100:.2f}%")
 
     st.divider()
@@ -280,16 +311,94 @@ if page == "Portfolio Overview":
         df_scores.style.map(_score_color, subset=score_cols),
         use_container_width=True,
     )
+    with st.expander("How scores are calculated", expanded=False):
+        st.markdown(
+            "All scores are **0–100**, computed by min-max normalising each brand's "
+            "raw metrics across the portfolio — so scores reflect relative standing, "
+            "not absolute Instagram benchmarks.\n\n"
+            "| Score | Formula | Notes |\n"
+            "|-------|---------|-------|\n"
+            "| **Content Velocity** | `posts_per_week × (1 + reel_share)` → normalised | "
+            "Rewards both publishing cadence and Reel adoption |\n"
+            "| **Engagement Quality** | `0.7 × engagement_rate + 0.3 × reel_view_rate` → normalised | "
+            "Engagement rate = (avg likes + comments) ÷ followers |\n"
+            "| **Growth Momentum** | `0.4 × growth_pct_30d + 0.6 × growth_pct_90d` → normalised | "
+            "Requires 14+ days of snapshot history; shown as 0 until then |\n\n"
+            "🔴 < 40 · 🟡 40–60 · 🟢 > 60"
+        )
+
+    # Export CSV
+    export_rows = []
+    for n in brand_names:
+        m  = all_metrics[n]
+        s  = scores[n]
+        g  = m["growth"]
+        st_data = m["state"] or {}
+        export_rows.append({
+            "Brand":              n,
+            "Handle":             BRANDS[n],
+            "Followers":          st_data.get("followers", 0),
+            "Δ Followers 7d":     g.get("follower_delta_7d"),
+            "Δ Followers 30d":    g.get("follower_delta_30d"),
+            "Δ Followers 90d":    g.get("follower_delta_90d"),
+            "Posts in window":    m["posting"]["posts_count"],
+            "Posts / week":       round(m["posting"]["posts_per_week"], 2),
+            "Reel share %":       round(m["posting"]["reel_share"] * 100, 1),
+            "Engagement rate %":  round(m["engagement"]["engagement_rate"] * 100, 3),
+            "Avg likes":          round(m["engagement"]["avg_likes"], 1),
+            "Avg comments":       round(m["engagement"]["avg_comments"], 1),
+            "Content Velocity":   s["content_velocity"],
+            "Engagement Quality": s["engagement_quality"],
+            "Growth Momentum":    s["growth_momentum"],
+            "Window start":       start_iso[:10],
+            "Window end":         end_iso[:10],
+        })
+    st.download_button(
+        label="⬇ Download CSV",
+        data=pd.DataFrame(export_rows).to_csv(index=False).encode("utf-8"),
+        file_name=f"akko_benchmark_{start_iso[:10]}_{end_iso[:10]}.csv",
+        mime="text/csv",
+    )
 
     st.divider()
 
-    # Row 4: Recommendation cards
+    # Row 4: Best posting windows across all brands
+    st.subheader("Best Posting Windows")
+    st.caption("Top engagement slot per brand in the selected date range.")
+    _DOW_LABELS_OV = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    best_slot_rows = []
+    for name in brand_names:
+        top = get_best_posting_slots(BRANDS[name], start_iso, end_iso, top_n=1)
+        if top:
+            s = top[0]
+            best_slot_rows.append({
+                "Brand":           name,
+                "Best slot (UTC)": f"{_DOW_LABELS_OV[s['dow']]} {s['hour']:02d}:00",
+                "Avg engagement":  f"{s['avg_engagement']:.0f}",
+            })
+        else:
+            best_slot_rows.append({"Brand": name, "Best slot (UTC)": "—", "Avg engagement": "—"})
+    st.dataframe(
+        pd.DataFrame(best_slot_rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.divider()
+
+    # Row 5: Recommendation cards
     st.subheader("Recommendations")
+    _SEVERITY_RENDER = {
+        "critical": st.error,
+        "warning":  st.warning,
+        "tip":      lambda msg: st.info(f"💡 {msg}"),
+        "ok":       lambda msg: st.success(f"✅ {msg}"),
+    }
     for name in brand_names:
         recs = generate_recommendations(name, all_metrics[name], scores[name])
         with st.expander(name, expanded=True):
             for r in recs:
-                st.markdown(f"- {r}")
+                _SEVERITY_RENDER[r["severity"]](r["message"])
 
 
 # ── Page 2: Per-Brand Drill-Down ──────────────────────────────────────────────
@@ -355,6 +464,23 @@ elif page == "Per-Brand Drill-Down":
         fig_h = px.imshow(pivot, labels=dict(x="Hour", y="Day", color="Posts"),
                           title="Posts by Day × Hour", color_continuous_scale="Blues")
         st.plotly_chart(fig_h, use_container_width=True)
+
+    # Best slots table
+    _DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    slots = get_best_posting_slots(handle, start_iso, end_iso, top_n=3)
+    if slots:
+        st.subheader("Best Times to Post")
+        st.caption("Slots ranked by average engagement (likes + comments) in the selected window.")
+        st.dataframe(
+            pd.DataFrame([{
+                "Day":             _DOW_LABELS[s["dow"]],
+                "Hour (UTC)":      f"{s['hour']:02d}:00",
+                "Avg engagement":  f"{s['avg_engagement']:.0f}",
+                "Posts sampled":   s["post_count"],
+            } for s in slots]),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     st.divider()
 
